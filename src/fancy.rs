@@ -4,6 +4,8 @@ use ::core::{
     num::NonZeroUsize,
 };
 
+
+
 pub fn parse<
     'a,
     Dest: 'a,
@@ -134,13 +136,12 @@ impl Symbol {
 pub enum Token<'a> {
     Str(&'a str),
     Char(char),
-    Esc(Escape<'a>),
     /// `(token_count, bracket_style)`
     Bracketed(Bracketed),
     Symbol(Symbol),
     BracketedSymbol(Symbol, Bracketed),
     SymbolId(Symbol, &'a str),
-    DoubleSymbol(Symbol, Symbol),
+    SymbolChar(Symbol, char),
     
 }
 
@@ -160,319 +161,6 @@ pub enum FancyError {
     #[error("Unrecognized escape char at {0}.")]
     UnrecognizedEscape(usize),
 }
-
-#[derive(Debug, Clone, Copy)]
-struct Backtrack {
-    src_index: usize,
-    token_index: usize,
-    bracket_style: BracketStyle,
-}
-
-impl Backtrack {
-    fn unmatched_error(self) -> FancyError {
-        FancyError::UnmatchedClose(self.bracket_style, self.src_index)
-    }
-
-    fn mismatched_error(self, found: BracketStyle, found_index: usize) -> FancyError {
-        FancyError::MismatchedBracket {
-            found,
-            found_index,
-            expected: self.bracket_style,
-            expected_index: self.src_index,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct BuilderFlags(u8);
-
-impl BuilderFlags {
-    const WAS_SYMBOL: Self = Self(1);
-    const IN_BRACKETS: Self = Self(2);
-    // const READING_RAW: Self = Self(4);
-
-    #[allow(unused)]
-    #[must_use]
-    #[inline(always)]
-    fn was_symbol(self) -> bool {
-        self.0 & Self::WAS_SYMBOL.0 == Self::WAS_SYMBOL.0
-    }
-    #[allow(unused)]
-    #[must_use]
-    #[inline(always)]
-    fn in_brackets(self) -> bool {
-        self.0 & Self::IN_BRACKETS.0 == Self::IN_BRACKETS.0
-    }
-    // #[must_use]
-    // #[inline(always)]
-    // fn reading_raw(self) -> bool {
-    //     self.0 & Self::READING_RAW.0 == Self::READING_RAW.0
-    // }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn add(&mut self, other: Self) {
-        self.0 |= other.0;
-    }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn add_was_symbol(&mut self) {
-        self.add(Self::WAS_SYMBOL);
-    }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn add_in_brackets(&mut self) {
-        self.add(Self::IN_BRACKETS);
-    }
-
-    // #[inline(always)]
-    // fn add_reading_raw(&mut self) {
-    //     self.add(Self::READING_RAW);
-    // }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn remove(&mut self, other: Self) {
-        self.0 &= !other.0
-    }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn remove_was_symbol(&mut self) {
-        self.remove(Self::WAS_SYMBOL);
-    }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn remove_in_brackets(&mut self) {
-        self.remove(Self::IN_BRACKETS);
-    }
-
-    // #[inline(always)]
-    // fn remove_reading_raw(&mut self) {
-    //     self.remove(Self::READING_RAW);
-    // }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn set(&mut self, flags: Self, value: bool) {
-        if value {
-            self.add(flags)
-        } else {
-            self.remove(flags)
-        }
-    }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn set_was_symbol(&mut self, value: bool) {
-        self.set(Self::WAS_SYMBOL, value)
-    }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn set_in_brackets(&mut self, value: bool) {
-        self.set(Self::IN_BRACKETS, value)
-    }
-
-    // #[inline(always)]
-    // fn set_reading_raw(&mut self, value: bool) {
-    //     self.set(Self::READING_RAW, value)
-    // }
-
-    #[allow(unused)]
-    #[must_use]
-    #[inline(always)]
-    fn and(self, other: Self) -> Self {
-        Self(self.0 & other.0)
-    }
-
-    #[allow(unused)]
-    #[must_use]
-    #[inline(always)]
-    fn or(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
-    #[allow(unused)]
-    #[must_use]
-    #[inline(always)]
-    fn xor(self, other: Self) -> Self {
-        Self(self.0 ^ other.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Escape<'a> {
-    Char(char),
-    Str(&'a str),
-}
-
-struct Builder<'a> {
-    flags: BuilderFlags,
-    index: usize,
-    raw_start: usize,
-    tokens: Vec<Token<'a>>,
-    backtrack: Vec<Backtrack>,
-}
-
-impl<'a> Builder<'a> {
-    #[inline(always)]
-    fn new() -> Self {
-        Self {
-            flags: BuilderFlags(0),
-            index: 0,
-            raw_start: 0,
-            tokens: Vec::new(),
-            backtrack: Vec::new(),
-        }
-    }
-
-    #[must_use]
-    #[inline(always)]
-    fn is_reading_raw(&self) -> bool {
-        self.raw_start != self.index
-    }
-
-    fn finish_raw(&mut self, src: &'a str, new_start: usize) {
-        if self.is_reading_raw() {
-            let raw_span = &src[self.raw_start..self.index];
-            let mut raw_offset = 0usize;
-            if self.flags.was_symbol() {
-                self.flags.remove_was_symbol();
-                #[inline(always)]
-                fn is_id_byte(b: u8) -> bool {
-                    matches!(
-                        b,
-                        b'A'..=b'Z' |
-                        b'a'..=b'z' |
-                        b'0'..=b'9' |
-                        b'_' | b'-'
-                    )
-                }
-                while raw_offset < raw_span.len()
-                && is_id_byte(raw_span.as_bytes()[raw_offset]) {
-                    raw_offset += 1;
-                }
-                if raw_offset > 0 {
-                    let symbol_index = self.tokens.len() - 1;
-                    let Token::Symbol(symbol) = self.tokens[symbol_index] else {
-                        unreachable!("Expected symbol");
-                    };
-                    self.tokens[symbol_index] = Token::SymbolId(symbol, &raw_span[..raw_offset]);
-                }
-            }
-            let after = &raw_span[raw_offset..];
-            if after.len() > 0 {
-                self.tokens.push(Token::Str(&raw_span[raw_offset..]));
-            }
-        }
-        self.raw_start = new_start;
-    }
-
-    fn push_char(&mut self, src: &'a str, count: usize, chr: char) -> Result<bool, FancyError> {
-        let new_index = self.index + count;
-        self.finish_raw(src, new_index);
-        self.flags.remove_was_symbol();
-        self.tokens.push(Token::Char(chr));
-        self.index = new_index;
-        Ok(true)
-    }
-
-    fn push_esc_str(&mut self, src: &'a str, count: usize, esc: &'a str) -> Result<bool, FancyError> {
-        let new_index = self.index + count;
-        self.finish_raw(src, new_index);
-        self.flags.remove_was_symbol();
-        self.tokens.push(Token::Esc(Escape::Str(esc)));
-        self.index = new_index;
-        Ok(true)
-    }
-
-    fn push_esc_char(&mut self, src: &'a str, count: usize, esc: char) -> Result<bool, FancyError> {
-        let new_index = self.index + count;
-        self.finish_raw(src, new_index);
-        self.flags.remove_was_symbol();
-        self.tokens.push(Token::Esc(Escape::Char(esc)));
-        self.index = new_index;
-        Ok(true)
-    }
-
-    fn push_symbol(&mut self, src: &'a str, symbol: Symbol) -> Result<bool, FancyError> {
-        let new_index = self.index + 1;
-        self.finish_raw(src, new_index);
-        if self.flags.was_symbol() {
-            self.flags.remove_was_symbol();
-            debug_assert!(self.tokens.len() > 0);
-            let symbol_index = self.tokens.len() - 1;
-            let Token::Symbol(last_symbol) = self.tokens[symbol_index] else {
-                unreachable!("Expected symbol");
-            };
-            self.tokens[symbol_index] = Token::DoubleSymbol(last_symbol, symbol);
-        } else {
-            self.tokens.push(Token::Symbol(symbol));
-            self.flags.add_was_symbol();
-        }
-        self.index = new_index;
-        Ok(true)
-    }
-
-    fn begin_bracketed(&mut self, src: &'a str, bracket_style: BracketStyle) -> Result<bool, FancyError> {
-        let new_index = self.index + 1;
-        self.finish_raw(src, new_index);
-        let token_index = if self.flags.was_symbol() {
-            self.flags.remove_was_symbol();
-            let index = self.tokens.len() - 1;
-            let Token::Symbol(symbol) = self.tokens[index] else {
-                unreachable!("Expected a symbol token.");
-            };
-            self.tokens[index] = Token::BracketedSymbol(symbol, Bracketed::new(usize::MAX, bracket_style));
-            index
-        } else {
-            let index = self.tokens.len();
-            self.tokens.push(Token::Bracketed(Bracketed::new(usize::MAX, bracket_style)));
-            index
-        };
-        self.backtrack.push(Backtrack {
-            src_index: self.index,
-            token_index: token_index,
-            bracket_style,
-        });
-        self.flags.add_in_brackets();
-        self.index = new_index;
-        Ok(true)
-   }
-
-    fn end_bracketed(&mut self, src: &'a str, bracket_style: BracketStyle) -> Result<bool, FancyError> {
-        let Some(back) = self.backtrack.pop() else {
-            return Err(FancyError::UnmatchedClose(
-                bracket_style,
-                self.index,
-            ));
-        };
-        if back.bracket_style != bracket_style {
-            return Err(back.mismatched_error(bracket_style, self.index));
-        }
-        if self.backtrack.is_empty() {
-            self.flags.remove_in_brackets();
-        }
-        let new_index = self.index + 1;
-        self.finish_raw(src, new_index);
-        // Just in case finish_raw did not remove it.
-        self.flags.remove_was_symbol();
-        let token_count = self.tokens.len() - back.token_index - 1;
-        let brack = match &mut self.tokens[back.token_index] {
-            Token::Bracketed(brack) => brack,
-            Token::BracketedSymbol(_, brack) => brack,
-            tt => unreachable!("Expected bracketed: {tt:#?}"),
-        };
-        brack.count = token_count;
-        self.index = new_index;
-        Ok(true)
-    }
-}
-
 /*
 So the idea behind fancy parse is that it should be able to perform
 more complex parsing on the source.
@@ -487,7 +175,272 @@ Some things it is planned to do:
   it will be treated as a name-based interpolation, where the entire name is consumed and added to the token
   list as a `Name(&str)`.
 */
-pub fn tokenize<'a>(source: &'a str) -> Result<Vec<Token<'a>>, FancyError> {
+pub fn fancy_parse<'a>(source: &'a str) -> Result<Vec<Token<'a>>, FancyError> {
+    #[derive(Debug, Clone, Copy)]
+    struct Backtrack {
+        src_index: usize,
+        token_index: usize,
+        bracket_style: BracketStyle,
+    }
+    impl Backtrack {
+        fn unmatched_error(self) -> FancyError {
+            FancyError::UnmatchedClose(self.bracket_style, self.src_index)
+        }
+
+        fn mismatched_error(self, found: BracketStyle, found_index: usize) -> FancyError {
+            FancyError::MismatchedBracket {
+                found,
+                found_index,
+                expected: self.bracket_style,
+                expected_index: self.src_index,
+            }
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct BuilderFlags(u8);
+    impl BuilderFlags {
+        const WAS_SYMBOL: Self = Self(1);
+        const IN_BRACKETS: Self = Self(2);
+        // const READING_RAW: Self = Self(4);
+
+        #[must_use]
+        #[inline(always)]
+        fn was_symbol(self) -> bool {
+            self.0 & Self::WAS_SYMBOL.0 == Self::WAS_SYMBOL.0
+        }
+        #[must_use]
+        #[inline(always)]
+        fn in_brackets(self) -> bool {
+            self.0 & Self::IN_BRACKETS.0 == Self::IN_BRACKETS.0
+        }
+        // #[must_use]
+        // #[inline(always)]
+        // fn reading_raw(self) -> bool {
+        //     self.0 & Self::READING_RAW.0 == Self::READING_RAW.0
+        // }
+
+        #[inline(always)]
+        fn add(&mut self, other: Self) {
+            self.0 |= other.0;
+        }
+
+        #[inline(always)]
+        fn add_was_symbol(&mut self) {
+            self.add(Self::WAS_SYMBOL);
+        }
+
+        #[inline(always)]
+        fn add_in_brackets(&mut self) {
+            self.add(Self::IN_BRACKETS);
+        }
+
+        // #[inline(always)]
+        // fn add_reading_raw(&mut self) {
+        //     self.add(Self::READING_RAW);
+        // }
+
+        #[inline(always)]
+        fn remove(&mut self, other: Self) {
+            self.0 &= !other.0
+        }
+
+        #[inline(always)]
+        fn remove_was_symbol(&mut self) {
+            self.remove(Self::WAS_SYMBOL);
+        }
+
+        #[inline(always)]
+        fn remove_in_brackets(&mut self) {
+            self.remove(Self::IN_BRACKETS);
+        }
+
+        // #[inline(always)]
+        // fn remove_reading_raw(&mut self) {
+        //     self.remove(Self::READING_RAW);
+        // }
+
+        #[inline(always)]
+        fn set(&mut self, flags: Self, value: bool) {
+            if value {
+                self.add(flags)
+            } else {
+                self.remove(flags)
+            }
+        }
+
+        #[inline(always)]
+        fn set_was_symbol(&mut self, value: bool) {
+            self.set(Self::WAS_SYMBOL, value)
+        }
+
+        #[inline(always)]
+        fn set_in_brackets(&mut self, value: bool) {
+            self.set(Self::IN_BRACKETS, value)
+        }
+
+        // #[inline(always)]
+        // fn set_reading_raw(&mut self, value: bool) {
+        //     self.set(Self::READING_RAW, value)
+        // }
+
+        #[must_use]
+        #[inline(always)]
+        fn and(self, other: Self) -> Self {
+            Self(self.0 & other.0)
+        }
+
+        #[must_use]
+        #[inline(always)]
+        fn or(self, other: Self) -> Self {
+            Self(self.0 | other.0)
+        }
+
+        #[must_use]
+        #[inline(always)]
+        fn xor(self, other: Self) -> Self {
+            Self(self.0 ^ other.0)
+        }
+    }
+    // #[derive(Debug)]
+    struct Builder<'a> {
+        flags: BuilderFlags,
+        index: usize,
+        raw_start: usize,
+        tokens: Vec<Token<'a>>,
+        backtrack: Vec<Backtrack>,
+    }
+    impl<'a> Builder<'a> {
+        #[inline(always)]
+        fn new() -> Self {
+            Self {
+                flags: BuilderFlags(0),
+                index: 0,
+                raw_start: 0,
+                tokens: Vec::new(),
+                backtrack: Vec::new(),
+            }
+        }
+
+        #[must_use]
+        #[inline(always)]
+        fn is_reading_raw(&self) -> bool {
+            self.raw_start != self.index
+        }
+
+        fn finish_raw(&mut self, src: &'a str, new_start: usize) {
+            if self.is_reading_raw() {
+                let raw_span = &src[self.raw_start..self.index];
+                let mut raw_offset = 0usize;
+                if self.flags.was_symbol() {
+                    self.flags.remove_was_symbol();
+                    #[inline(always)]
+                    fn is_id_byte(b: u8) -> bool {
+                        matches!(
+                            b,
+                            b'A'..=b'A' |
+                            b'a'..=b'z' |
+                            b'0'..=b'9' |
+                            b'_' | b'-'
+                        )
+                    }
+                    while is_id_byte(raw_span.as_bytes()[raw_offset]) {
+                        raw_offset += 1;
+                    }
+                    if raw_offset > 0 {
+                        let symbol_index = self.tokens.len() - 1;
+                        let Token::Symbol(symbol) = self.tokens[symbol_index] else {
+                            unreachable!("Expected symbol");
+                        };
+                        self.tokens[symbol_index] = Token::SymbolId(symbol, &raw_span[..raw_offset]);
+                    }
+                }
+                self.tokens.push(Token::Str(&raw_span[raw_offset..]));
+            }
+            self.raw_start = new_start;
+        }
+
+        fn push_char(&mut self, src: &'a str, count: usize, chr: char) -> Result<bool, FancyError> {
+            let new_index = self.index + count;
+            self.finish_raw(src, new_index);
+            self.flags.remove_was_symbol();
+            self.tokens.push(Token::Char(chr));
+            self.index = new_index;
+            Ok(true)
+        }
+
+        fn push_symbol(&mut self, src: &'a str, symbol: Symbol) -> Result<bool, FancyError> {
+            let new_index = self.index + 1;
+            self.finish_raw(src, new_index);
+            if self.flags.was_symbol() {
+                self.flags.remove_was_symbol();
+                debug_assert!(self.tokens.len() > 0);
+                let symbol_index = self.tokens.len() - 1;
+                let Token::Symbol(last_symbol) = self.tokens[symbol_index] else {
+                    unreachable!("Expected symbol");
+                };
+                self.tokens[symbol_index] = Token::SymbolChar(last_symbol, symbol.as_char());
+            } else {
+                self.tokens.push(Token::Symbol(symbol));
+                self.flags.add_was_symbol();
+            }
+            self.index = new_index;
+            Ok(true)
+        }
+
+        fn begin_bracketed(&mut self, src: &'a str, bracket_style: BracketStyle) -> Result<bool, FancyError> {
+            let new_index = self.index + 1;
+            self.finish_raw(src, new_index);
+            let token_index = if self.flags.was_symbol() {
+                self.flags.remove_was_symbol();
+                let index = self.tokens.len() - 1;
+                let Token::Symbol(symbol) = self.tokens[index] else {
+                    unreachable!("Expected a symbol token.");
+                };
+                self.tokens[index] = Token::BracketedSymbol(symbol, Bracketed::new(usize::MAX, bracket_style));
+                index
+            } else {
+                let index = self.tokens.len();
+                self.tokens.push(Token::Bracketed(Bracketed::new(usize::MAX, bracket_style)));
+                index
+            };
+            self.backtrack.push(Backtrack {
+                src_index: self.index,
+                token_index: token_index,
+                bracket_style,
+            });
+            self.flags.add_in_brackets();
+            self.index = new_index;
+            Ok(true)
+       }
+
+        fn end_bracketed(&mut self, src: &'a str, bracket_style: BracketStyle) -> Result<bool, FancyError> {
+            let Some(back) = self.backtrack.pop() else {
+                return Err(FancyError::UnmatchedClose(
+                    bracket_style,
+                    self.index,
+                ));
+            };
+            if back.bracket_style != bracket_style {
+                return Err(back.mismatched_error(bracket_style, self.index));
+            }
+            if self.backtrack.is_empty() {
+                self.flags.remove_in_brackets();
+            }
+            let new_index = self.index + 1;
+            self.finish_raw(src, new_index);
+            // Just in case finish_raw did not remove it.
+            self.flags.remove_was_symbol();
+            let token_count = self.tokens.len() - back.token_index - 1;
+            let brack = match &mut self.tokens[back.token_index] {
+                Token::Bracketed(brack) => brack,
+                Token::BracketedSymbol(_, brack) => brack,
+                tt => unreachable!("Expected bracketed: {tt:#?}"),
+            };
+            brack.count = token_count;
+            self.index = new_index;
+            Ok(true)
+        }
+    }
     let mut builder = Builder::new();
     parse(
         &mut builder,
@@ -510,21 +463,18 @@ pub fn tokenize<'a>(source: &'a str) -> Result<Vec<Token<'a>>, FancyError> {
                             match src_at.as_bytes()[1] {
                                 $(
                                     $matched => {
-                                        return out.push_esc_char(src, 2, $escaped);
+                                        return out.push_char(src, 2, $escaped);
                                     },
                                 )*
-                                _ => {
-                                    let chr = src_at.chars().next().unwrap();
-                                    return out.push_esc_char(src, 1 + chr.len_utf8(), chr);
-                                },
+                                _ => return Err(FancyError::UnrecognizedEscape(out.index)),
                             }
                         };
                     }
                     escapes!{
-                        b'n' => 'n',
-                        b't' => 't',
-                        b'r' => 'r',
-                        b'0' => '0',
+                        b'n' => '\n',
+                        b't' => '\t',
+                        b'r' => '\r',
+                        b'0' => '\0',
                         b'{' => '{',
                         b'}' => '}',
                         b'[' => '[',
@@ -647,6 +597,31 @@ macro_rules! default_visit_fns {
             }
         }
     };
+    (symbol_char: $($symbol:ident => $name:ident),+$(,)?) => {
+        paste::paste!{
+            $(
+                fn [< visit_ $name _char >](
+                    &mut self,
+                    chr: char,
+                ) -> Result<(), Self::Error> {
+                    self.visit_symbol(Symbol::$symbol)?;
+                    self.visit_char(chr)
+                }
+            )*
+
+            fn visit_symbol_char(
+                &mut self,
+                symbol: Symbol,
+                chr: char,
+            ) -> Result<(), Self::Error> {
+                match symbol {
+                    $(
+                        Symbol::$symbol => self.[< visit_ $name _char>](chr),
+                    )*
+                }
+            }
+        }
+    };
     (symbol_id: $($symbol:ident => $name:ident),*$(,)?) => {
         paste::paste!{
             $(
@@ -675,6 +650,7 @@ macro_rules! default_visit_fns {
     ($($symbol:ident => $name:ident),+$(,)?) => {
         default_visit_fns!{symbol:          $($symbol => $name,)*}
         default_visit_fns!{bracketed_symbol:$($symbol => $name,)*}
+        default_visit_fns!{symbol_char:     $($symbol => $name,)*}
         default_visit_fns!{symbol_id:       $($symbol => $name,)*}
     };
 }
@@ -697,10 +673,6 @@ pub trait FancyPerformer<'a> {
                 },
                 Token::Char(esc) => {
                     self.visit_char(esc)?;
-                    index += 1;
-                },
-                Token::Esc(esc) => {
-                    self.visit_esc(esc)?;
                     index += 1;
                 },
                 Token::Bracketed(bracketed) => {
@@ -729,8 +701,8 @@ pub trait FancyPerformer<'a> {
                     self.visit_symbol_id(symbol, id)?;
                     index += 1;
                 },
-                Token::DoubleSymbol(lhs, rhs) => {
-                    self.visit_double_symbol(lhs, rhs)?;
+                Token::SymbolChar(symbol, chr) => {
+                    self.visit_symbol_char(symbol, chr)?;
                     index += 1;
                 },
             }
@@ -750,17 +722,6 @@ pub trait FancyPerformer<'a> {
         let mut bytes = [0u8; 4];
         self.visit_str(chr.encode_utf8(&mut bytes))
     }
-
-    fn visit_esc(
-        &mut self,
-        esc: Escape<'a>,
-    ) -> Result<(), Self::Error> {
-        self.visit_str("\\")?;
-        match esc {
-            Escape::Char(chr) => self.visit_char(chr),
-            Escape::Str(s) => self.visit_str(s),
-        }
-    }
     
     fn visit_bracketed(
         &mut self,
@@ -777,15 +738,6 @@ pub trait FancyPerformer<'a> {
         Octo => octo,
         Dollar => dollar,
         Percent => percent,
-    }
-
-    fn visit_double_symbol(
-        &mut self,
-        lhs: Symbol,
-        rhs: Symbol,
-    ) -> Result<(), Self::Error> {
-        self.visit_symbol(lhs)?;
-        self.visit_symbol(rhs)
     }
 }
 

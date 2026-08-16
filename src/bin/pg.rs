@@ -12,7 +12,7 @@ use terp::algo::{
     interpolate,
     parse,
     Token,
-    fancy_parse,
+    tokenize,
     FancyPerformer,
 };
 
@@ -46,22 +46,58 @@ fn print_nodes(nodes: &[ParseNode<'_>], indent: usize, indent_width: usize, inde
     }
 }
 
-fn main() {
-    let text = r###"
-[test[test]]{test}This is a test{test with spaces} ${hmm} @hmm I wonder what this will do.$#
-"###.trim();
-    let tokens = match fancy_parse(text) {
-        Ok(tokens) => tokens,
-        Err(error) => {
-            eprintln!("{error}");
-            return;
+#[derive(Debug, Default)]
+pub struct EnvPerformer {
+    buffer: String,
+}
+
+impl<'a> FancyPerformer<'a> for EnvPerformer {
+    type Error = ();
+    fn visit_str(
+        &mut self,
+        raw: &str,
+    ) -> Result<(), Self::Error> {
+        self.buffer.push_str(raw);
+        Ok(())
+    }
+    
+    fn visit_dollar_id(&mut self, id: &'a str) -> Result<(),Self::Error> {
+        if let Ok(value) = std::env::var(id) {
+            return self.visit_str(value.as_str());
         }
-    };
-    // println!("{tokens:#?}");
-    let mut buffer = String::with_capacity(1024);
-    buffer.visit_tokens(&tokens).expect("Failed to visit tokens.");
-    println!("{buffer}");
-    assert_eq!(buffer.as_str(), text);
+        Ok(())
+    }
+
+    fn visit_braced_dollar(&mut self,tokens: &[Token<'a>],) -> Result<(),Self::Error> {
+        let mut sub = Self::default();
+        sub.visit_tokens(tokens)?;
+        self.visit_dollar_id(sub.buffer.as_str())
+    }
+}
+
+fn main() {
+//     let text = r###"
+// [test[test]]{test}This is a test{test with spaces} ${hmm} @hmm I wonder what this will do.$#
+// "###.trim();
+//     println!("{text}");
+//     let tokens = match tokenize(text) {
+//         Ok(tokens) => tokens,
+//         Err(error) => {
+//             eprintln!("{error}");
+//             return;
+//         }
+//     };
+//     println!("{tokens:#?}");
+//     let mut buffer = String::with_capacity(1024);
+//     buffer.visit_tokens(&tokens).expect("Failed to visit tokens.");
+//     println!("{buffer}");
+//     assert_eq!(buffer.as_str(), text);
+    let mut env_perf = EnvPerformer::default();
+    let format = "The value of foobar is \"${foobar}\"";
+    let tokens = tokenize(format).expect("Failed to tokenize.");
+    env_perf.visit_tokens(&tokens).expect("Failed to visit tokens");
+    println!("{tokens:?}");
+    println!("{}", env_perf.buffer);
     // let format = "Hello, %{item_%{w1}%}% and %{item_%{w2}%}%, this is a %{0}%";
     // let interp = interpolate(format, &mut |buf: &mut String, token: &str| {
     //     match token {
