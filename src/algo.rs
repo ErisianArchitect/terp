@@ -33,16 +33,22 @@ impl BracketStyle {
     const LHS: &'static str = "({[<";
     const RHS: &'static str = ")}]>";
 
-    #[inline(always)]
-    pub fn open_str(self) -> &'static str {
+    #[inline]
+    pub const fn open_str(self) -> &'static str {
         let index = self as usize;
-        &Self::LHS[index..index + 1]
+        unsafe {
+            let slice = crate::util::subslice(index..index + 1, Self::LHS.as_bytes());
+            str::from_utf8_unchecked(slice)
+        }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn close_str(self) -> &'static str {
         let index = self as usize;
-        &Self::RHS[index..index + 1]
+        unsafe {
+            let slice = crate::util::subslice(index..index + 1, Self::RHS.as_bytes());
+            str::from_utf8_unchecked(slice)
+        }
     }
 }
 
