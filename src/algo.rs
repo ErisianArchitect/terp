@@ -788,7 +788,12 @@ pub trait TokenVisitor<'a> {
     /// | `#`  | `#`       |
     /// | `$`  | `$`       |
     /// | `%`  | `%`       |
-    /// 
+    /// Additionally, it should handle `\xHH` and `\XHH` for
+    /// ascii hex bytes.
+    ///
+    /// There is a function provided that can perform these
+    /// escapes for you.
+    /// [terp::util::escape_sequence]
     fn visit_esc(
         &mut self,
         esc: &'a str,
