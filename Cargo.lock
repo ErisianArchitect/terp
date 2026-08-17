@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "byteset"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "192375f2d46a2cfcb26a53ec9250f4e0fb515a0169dff65de60579cea7e5035a"
+
+[[package]]
 name = "isit"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -47,6 +53,7 @@ dependencies = [
 name = "terp"
 version = "0.1.0"
 dependencies = [
+ "byteset",
  "isit",
  "paste",
  "thiserror",

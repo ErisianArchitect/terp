@@ -13,7 +13,7 @@ use terp::algo::{
     parse,
     Token,
     tokenize,
-    FancyPerformer,
+    TokenVisitor,
 };
 
 fn print_nodes(nodes: &[ParseNode<'_>], indent: usize, indent_width: usize, index: usize) {
@@ -47,11 +47,11 @@ fn print_nodes(nodes: &[ParseNode<'_>], indent: usize, indent_width: usize, inde
 }
 
 #[derive(Debug, Default)]
-pub struct EnvPerformer {
+pub struct EnvVisitor {
     buffer: String,
 }
 
-impl<'a> FancyPerformer<'a> for EnvPerformer {
+impl<'a> TokenVisitor<'a> for EnvVisitor {
     type Error = ();
     fn visit_str(
         &mut self,
@@ -73,6 +73,16 @@ impl<'a> FancyPerformer<'a> for EnvPerformer {
         sub.visit_tokens(tokens)?;
         self.visit_dollar_id(sub.buffer.as_str())
     }
+
+    fn visit_esc(
+        &mut self,
+        esc: &'a str,
+    ) -> terp::algo::Result<(), Self::Error> {
+        let Ok(esc) = terp::util::escape_sequence(esc) else {
+            return Err(());
+        };
+        self.visit_str(esc.encode_utf8(&mut [0u8; 4]))
+    }
 }
 
 fn main() {
@@ -87,13 +97,13 @@ fn main() {
 //             return;
 //         }
 //     };
-//     println!("{tokens:#?}");
-//     let mut buffer = String::with_capacity(1024);
+    // println!("{tokens:#?}");
+    // let mut buffer = String::with_capacity(1024);
 //     buffer.visit_tokens(&tokens).expect("Failed to visit tokens.");
 //     println!("{buffer}");
 //     assert_eq!(buffer.as_str(), text);
-    let mut env_perf = EnvPerformer::default();
-    let format = "The value of foobar is \"${foobar}\"";
+    let mut env_perf = EnvVisitor::default();
+    let format = r###"The value of \x41 foo${foo_end} is "${foo${foo_end}}"\nSession Name: $SESSION_NAME"###;
     let tokens = tokenize(format).expect("Failed to tokenize.");
     env_perf.visit_tokens(&tokens).expect("Failed to visit tokens");
     println!("{tokens:?}");

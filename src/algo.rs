@@ -133,8 +133,7 @@ impl Symbol {
 #[derive(Debug, Clone, Copy)]
 pub enum Token<'a> {
     Str(&'a str),
-    Char(char),
-    Esc(Escape<'a>),
+    Esc(&'a str),
     /// `(token_count, bracket_style)`
     Bracketed(Bracketed),
     Symbol(Symbol),
@@ -145,7 +144,7 @@ pub enum Token<'a> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum FancyError {
+pub enum Error {
     #[error("Unmatched open {0} at {1}")]
     UnmatchedOpen(BracketStyle, usize),
     #[error("Unmatched close {0} at {1}")]
@@ -159,7 +158,13 @@ pub enum FancyError {
     },
     #[error("Unrecognized escape char at {0}.")]
     UnrecognizedEscape(usize),
+    #[error("Invalid hex escape at {0}.")]
+    InvalidHexEscape(usize),
+    #[error("Bracketed sequence size not what it was expected to be.")]
+    InvalidBracketed,
 }
+
+pub type Result<T = (), E = Error> = ::core::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy)]
 struct Backtrack {
@@ -169,12 +174,12 @@ struct Backtrack {
 }
 
 impl Backtrack {
-    fn unmatched_error(self) -> FancyError {
-        FancyError::UnmatchedClose(self.bracket_style, self.src_index)
+    fn unmatched_error(self) -> Error {
+        Error::UnmatchedClose(self.bracket_style, self.src_index)
     }
 
-    fn mismatched_error(self, found: BracketStyle, found_index: usize) -> FancyError {
-        FancyError::MismatchedBracket {
+    fn mismatched_error(self, found: BracketStyle, found_index: usize) -> Error {
+        Error::MismatchedBracket {
             found,
             found_index,
             expected: self.bracket_style,
@@ -372,34 +377,16 @@ impl<'a> Builder<'a> {
         self.raw_start = new_start;
     }
 
-    fn push_char(&mut self, src: &'a str, count: usize, chr: char) -> Result<bool, FancyError> {
+    fn push_esc_str(&mut self, src: &'a str, count: usize, esc: &'a str) -> Result<bool> {
         let new_index = self.index + count;
         self.finish_raw(src, new_index);
         self.flags.remove_was_symbol();
-        self.tokens.push(Token::Char(chr));
+        self.tokens.push(Token::Esc(esc));
         self.index = new_index;
         Ok(true)
     }
 
-    fn push_esc_str(&mut self, src: &'a str, count: usize, esc: &'a str) -> Result<bool, FancyError> {
-        let new_index = self.index + count;
-        self.finish_raw(src, new_index);
-        self.flags.remove_was_symbol();
-        self.tokens.push(Token::Esc(Escape::Str(esc)));
-        self.index = new_index;
-        Ok(true)
-    }
-
-    fn push_esc_char(&mut self, src: &'a str, count: usize, esc: char) -> Result<bool, FancyError> {
-        let new_index = self.index + count;
-        self.finish_raw(src, new_index);
-        self.flags.remove_was_symbol();
-        self.tokens.push(Token::Esc(Escape::Char(esc)));
-        self.index = new_index;
-        Ok(true)
-    }
-
-    fn push_symbol(&mut self, src: &'a str, symbol: Symbol) -> Result<bool, FancyError> {
+    fn push_symbol(&mut self, src: &'a str, symbol: Symbol) -> Result<bool> {
         let new_index = self.index + 1;
         self.finish_raw(src, new_index);
         if self.flags.was_symbol() {
@@ -418,7 +405,7 @@ impl<'a> Builder<'a> {
         Ok(true)
     }
 
-    fn begin_bracketed(&mut self, src: &'a str, bracket_style: BracketStyle) -> Result<bool, FancyError> {
+    fn begin_bracketed(&mut self, src: &'a str, bracket_style: BracketStyle) -> Result<bool> {
         let new_index = self.index + 1;
         self.finish_raw(src, new_index);
         let token_index = if self.flags.was_symbol() {
@@ -444,9 +431,9 @@ impl<'a> Builder<'a> {
         Ok(true)
    }
 
-    fn end_bracketed(&mut self, src: &'a str, bracket_style: BracketStyle) -> Result<bool, FancyError> {
+    fn end_bracketed(&mut self, src: &'a str, bracket_style: BracketStyle) -> Result<bool> {
         let Some(back) = self.backtrack.pop() else {
-            return Err(FancyError::UnmatchedClose(
+            return Err(Error::UnmatchedClose(
                 bracket_style,
                 self.index,
             ));
@@ -474,7 +461,7 @@ impl<'a> Builder<'a> {
 }
 
 /*
-So the idea behind fancy parse is that it should be able to perform
+So the idea behind tokenize is that it should be able to perform
 more complex parsing on the source.
 Some things it is planned to do:
 - Handle more complex interpolation specifiers:
@@ -487,12 +474,12 @@ Some things it is planned to do:
   it will be treated as a name-based interpolation, where the entire name is consumed and added to the token
   list as a `Name(&str)`.
 */
-pub fn tokenize<'a>(source: &'a str) -> Result<Vec<Token<'a>>, FancyError> {
+pub fn tokenize<'a>(source: &'a str) -> Result<Vec<Token<'a>>> {
     let mut builder = Builder::new();
     parse(
         &mut builder,
         source,
-        move |out, src| -> Result<bool, FancyError> {
+        move |out, src| -> Result<bool> {
             if out.index >= src.len() {
                 if let Some(unmatched) = out.backtrack.pop() {
                     return Err(unmatched.unmatched_error());
@@ -504,40 +491,62 @@ pub fn tokenize<'a>(source: &'a str) -> Result<Vec<Token<'a>>, FancyError> {
             match src_at.as_bytes()[0] {
                 b'\\' if src_at.len() >= 2 => {
                     macro_rules! escapes {
-                        ($(
-                            $matched:literal => $escaped:literal,
-                        )+) => {
+                        (
+                            $(
+                                $matched:literal => $count:expr,
+                            )+
+                            $other:ident => $default:stmt
+                            $(,)?
+                        ) => {
                             match src_at.as_bytes()[1] {
                                 $(
                                     $matched => {
-                                        return out.push_esc_char(src, 2, $escaped);
+                                        let count = $count + 1;
+                                        let esc = &src_at[1..count];
+                                        return out.push_esc_str(src, count, esc);
                                     },
                                 )*
-                                _ => {
-                                    let chr = src_at.chars().next().unwrap();
-                                    return out.push_esc_char(src, 1 + chr.len_utf8(), chr);
-                                },
+                                $other => {
+                                    $default
+                                }
                             }
                         };
                     }
                     escapes!{
-                        b'n' => 'n',
-                        b't' => 't',
-                        b'r' => 'r',
-                        b'0' => '0',
-                        b'{' => '{',
-                        b'}' => '}',
-                        b'[' => '[',
-                        b']' => ']',
-                        b'(' => '(',
-                        b')' => ')',
-                        b'<' => '<',
-                        b'>' => '>',
-                        b'@' => '@',
-                        b'#' => '#',
-                        b'$' => '$',
-                        b'%' => '%',
+                        b'n'  => 1,
+                        b't'  => 1,
+                        b'r'  => 1,
+                        b'0'  => 1,
+                        b'\\' => 1,
+                        b'{'  => 1,
+                        b'}'  => 1,
+                        b'['  => 1,
+                        b']'  => 1,
+                        b'('  => 1,
+                        b')'  => 1,
+                        b'<'  => 1,
+                        b'>'  => 1,
+                        b'@'  => 1,
+                        b'#'  => 1,
+                        b'$'  => 1,
+                        b'%'  => 1,
+                        other => {
+                            match other {
+                                b'x' | b'X' if src_at.len() >= 4 => {
+                                    if crate::util::is_hex_digit_u8(src_at.as_bytes()[2])
+                                    && crate::util::is_hex_digit_u8(src_at.as_bytes()[3]) {
+                                        return out.push_esc_str(src, 4, &src_at[1..4]);
+                                    } else {
+                                        return Err(Error::InvalidHexEscape(out.index));
+                                    }
+                                }
+                                _ => (),
+                            }
+                        }
                     }
+                    let end = src_at.ceil_char_boundary(2);
+                    let esc = &src_at[1..end];
+                    return out.push_esc_str(src, 1 + esc.len(), esc);
                 }
                 b'{' => return out.begin_bracketed(src, BracketStyle::Brace),
                 b'[' => return out.begin_bracketed(src, BracketStyle::Square),
@@ -560,9 +569,14 @@ pub fn tokenize<'a>(source: &'a str) -> Result<Vec<Token<'a>>, FancyError> {
     Ok(builder.tokens)
 }
 
-pub trait FancyPerformerError<'a> {
-    fn invalid_tokens(tokens: &[Token<'a>]) -> Self;
+pub trait TokenVisitorError {
     fn invalid_bracketed() -> Self;
+}
+
+impl TokenVisitorError for Error {
+    fn invalid_bracketed() -> Self {
+        Self::InvalidBracketed
+    }
 }
 
 macro_rules! default_visit_fns {
@@ -572,7 +586,7 @@ macro_rules! default_visit_fns {
                 fn [< visit_ $name >](
                     &mut self,
                 ) -> Result<(), Self::Error> {
-                    self.visit_char(Symbol::$symbol.as_char())
+                    self.visit_str(Symbol::$symbol.as_str())
                 }
             )*
             
@@ -679,24 +693,21 @@ macro_rules! default_visit_fns {
     };
 }
 
-pub trait FancyPerformer<'a> {
-    type Error: FancyPerformerError<'a>;
+pub trait TokenVisitor<'a> {
+    type Error: TokenVisitorError;
 
+    /// Visit an entire sequence of tokens.
     fn visit_tokens(
         &mut self,
         tokens: &[Token<'a>],
     ) -> Result<(), Self::Error>
-     where Self::Error: FancyPerformerError<'a>{
+     where Self::Error: TokenVisitorError {
         let mut index = 0usize;
         while index < tokens.len() {
             let token = tokens[index];
             match token {
                 Token::Str(raw) => {
                     self.visit_str(raw)?;
-                    index += 1;
-                },
-                Token::Char(esc) => {
-                    self.visit_char(esc)?;
                     index += 1;
                 },
                 Token::Esc(esc) => {
@@ -738,28 +749,47 @@ pub trait FancyPerformer<'a> {
         Ok(())
     }
 
+    /// Visit a string value. By default, all
+    /// visitor functions feed into this function
+    /// so that the default behavior is to rebuild
+    /// the original string that was passed in.
     fn visit_str(
         &mut self,
         raw: &str,
     ) -> Result<(), Self::Error>;
 
-    fn visit_char(
-        &mut self,
-        chr: char,
-    ) -> Result<(), Self::Error> {
-        let mut bytes = [0u8; 4];
-        self.visit_str(chr.encode_utf8(&mut bytes))
-    }
-
+    /// Visit an escaped sequence.
+    ///
+    /// Escapes are specified using the backslash (`\`)
+    /// character, followed by some escape sequence such
+    /// as `\n`, `\t`, `\{`, or `\$`.
+    /// This function should handle the following characters:
+    /// | char | escape to |
+    /// |------|-----------|
+    /// | `n`  | `\n`      |
+    /// | `t`  | `\t`      |
+    /// | `r`  | `\r`      |
+    /// | `0`  | `\0`      |
+    /// | `\`  | `\`       |
+    /// | `{`  | `{`       |
+    /// | `}`  | `}`       |
+    /// | `[`  | `[`       |
+    /// | `]`  | `]`       |
+    /// | `(`  | `(`       |
+    /// | `)`  | `)`       |
+    /// | `<`  | `<`       |
+    /// | `>`  | `>`       |
+    /// | `@`  | `@`       |
+    /// | `#`  | `#`       |
+    /// | `$`  | `$`       |
+    /// | `%`  | `%`       |
+    /// 
     fn visit_esc(
         &mut self,
-        esc: Escape<'a>,
+        esc: &'a str,
     ) -> Result<(), Self::Error> {
         self.visit_str("\\")?;
-        match esc {
-            Escape::Char(chr) => self.visit_char(chr),
-            Escape::Str(s) => self.visit_str(s),
-        }
+        self.visit_str(esc)
     }
     
     fn visit_bracketed(
@@ -789,17 +819,13 @@ pub trait FancyPerformer<'a> {
     }
 }
 
-impl<'a> FancyPerformerError<'a> for () {
-    fn invalid_tokens(_: &[Token<'a>]) -> Self {
-        ()
-    }
-
+impl TokenVisitorError for () {
     fn invalid_bracketed() -> Self {
         ()
     }
 }
 
-impl<'a> FancyPerformer<'a> for String {
+impl<'a> TokenVisitor<'a> for String {
     type Error = ();
 
     fn visit_str(&mut self, raw: &str) -> Result<(), Self::Error> {
@@ -833,10 +859,6 @@ impl StringPool {
     fn put(&mut self, s: String) {
         self.pool.push(s);
     }
-}
-
-pub struct FancyOptions {
-    
 }
 
 #[derive(Debug, Clone, Copy)]
