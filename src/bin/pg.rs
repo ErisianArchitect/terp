@@ -103,7 +103,7 @@ fn main() {
 //     println!("{buffer}");
 //     assert_eq!(buffer.as_str(), text);
     let mut env_perf = EnvVisitor::default();
-    let format = r###"The value of \x41 foo${foo_end} is "${foo${foo_end}}"\nSession Name: $SESSION_NAME"###;
+    let format = r###"The \x76alue of foo${foo_end} is "${foo${foo_end}}"\nSession Name: $SESSION_NAME"###;
     let tokens = tokenize(format).expect("Failed to tokenize.");
     env_perf.visit_tokens(&tokens).expect("Failed to visit tokens");
     println!("{tokens:?}");
