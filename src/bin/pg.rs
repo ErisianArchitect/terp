@@ -86,80 +86,26 @@ impl<'a> TokenVisitor<'a> for EnvVisitor {
 }
 
 fn main() {
-//     let text = r###"
-// [test[test]]{test}This is a test{test with spaces} ${hmm} @hmm I wonder what this will do.$#
-// "###.trim();
-//     println!("{text}");
-//     let tokens = match tokenize(text) {
-//         Ok(tokens) => tokens,
-//         Err(error) => {
-//             eprintln!("{error}");
-//             return;
-//         }
-//     };
-    // println!("{tokens:#?}");
-    // let mut buffer = String::with_capacity(1024);
-//     buffer.visit_tokens(&tokens).expect("Failed to visit tokens.");
-//     println!("{buffer}");
-//     assert_eq!(buffer.as_str(), text);
     let mut env_perf = EnvVisitor::default();
-    let format = r###"The \x76alue of foo${foo_end} is "${foo${foo_end}}"\nSession Name: $SESSION_NAME"###;
+    let format = r###"
+{@
+    This is a block.
+    \x7a
+    \x7A
+}
+\@foo #[left #[left inner #[%(middle)] right inner] right]
+The \x76alue of foo${foo_end} is "${foo${foo_end}}"\nSession Name: $SESSION_NAME
+"###.trim();
     let tokens = tokenize(format).expect("Failed to tokenize.");
-    env_perf.visit_tokens(&tokens).expect("Failed to visit tokens");
+    let mut rebuilt = String::with_capacity(format.len());
+    rebuilt.visit_tokens(&tokens).expect("Failed to visit tokens. rebuilt");
+    env_perf.visit_tokens(&tokens).expect("Failed to visit tokens. env_perf");
+    assert_eq!(rebuilt, format);
+    println!("-[tokens]-------------------------------------------------------");
     println!("{tokens:?}");
+    println!("-[rebuilt]------------------------------------------------------");
+    println!("{rebuilt}");
+    println!("-[interpolated]-------------------------------------------------");
     println!("{}", env_perf.buffer);
-    // let format = "Hello, %{item_%{w1}%}% and %{item_%{w2}%}%, this is a %{0}%";
-    // let interp = interpolate(format, &mut |buf: &mut String, token: &str| {
-    //     match token {
-    //         "0" => buf.push_str("test"),
-    //         "w1" => buf.push_str("world"),
-    //         "w2" => buf.push_str("salad"),
-    //         "item_world" => buf.push_str("World"),
-    //         "item_salad" => buf.push_str("Salad"),
-    //         _ => return Err(()),
-    //     }
-    //     Ok(())
-    // }).expect("Failed to interpolate.");
-    // println!("{interp}");
-    // let format = "%{foo=David.}%Hello, %{foo}%\n%{foo=World}%Hello, %{foo}%.\n%{{}=%{{}=test}%This is a %{{}}%.}%[%{{}}%]";
-    // let mut map = std::collections::HashMap::<Box<str>, Box<str>>::new();
-    // let interp = interpolate(format, &mut move |buf, token| {
-    //     if let Some(eq_ind) = token.find("=") {
-    //         let name = &token[..eq_ind];
-    //         let content = &token[eq_ind+1..];
-    //         map.insert(name.into(), content.into());
-    //     } else {
-    //         if let Some(found) = map.get(token) {
-    //             buf.push_str(found);
-    //         } else {
-    //             return Err(());
-    //         }
-    //     }
-    //     Result::<(), ()>::Ok(())
-    // }).expect("Failed to interpolate.");
-    // println!("{interp}");
-    // let format = "Hello, world!";
-    // enum BracketStyle {
-    //     Curly,
-    //     Parens,
-    //     Angle,
-    //     Square,
-    // }
-
-    // for (i, token) in dest.into_iter().enumerate() {
-    //     println!("{i:>02}: {token:?}");
-    // }
-    /*  ──[OUTPUT]──────────────────────────────────────────────────────
-        Hello, David.
-        Hello, World.
-        [This is a test.]
-        ────────────────────────────────────────────────────────────────  */
-    // let mut nodes = Vec::new();
-    // parse_interp(
-    //     &mut nodes,
-    //     "Hello, world! This is a %{nested_\\%{\\}%%{nest_value}%}%. This is the end. %{Left %{Inner Left %{middle}% Inner Right}% Right}%. Okay, for real this time."
-    // ).expect("Failed to parse.");
-    // print_nodes(&nodes, 0, 4, 0);
-    // println!("----------------");
-    // println!("{nodes:#?}");
+    println!("----------------------------------------------------------------");
 }
