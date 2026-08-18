@@ -13,17 +13,18 @@ macro_rules! bitflags {
     (@check_name: ANY) => { $crate::bitflags!{@reserved_err: ANY} };
     (@check_name: EQ) => { $crate::bitflags!{@reserved_err: EQ} };
     (@check_name: NE) => { $crate::bitflags!{@reserved_err: NE} };
-    (@check_name: $allowed:ident) => {};
+    (@check_name: $allowed:tt) => {};
     (
         $(
             #[$attr:meta]
         )*
-        $struct_vis:vis struct $type_name:ident ($mask_type:ident) {
-        $(
-            $flag_vis:vis $flag_name:ident = $mask_value:expr
-        ),+
-        $(,)?
-    }) => {
+        $struct_vis:vis struct $type_name:ident ($mask_type:ty) {
+            $(
+                $flag_vis:vis $flag_name:ident = $mask_value:expr
+            ),+
+            $(,)?
+        }
+    ) => {
         paste::paste!{
             $(
                 $crate::bitflags!{@check_name: [< $flag_name:snake:upper >]}
@@ -175,7 +176,7 @@ macro_rules! bitflags {
                 #[inline(always)]
                 pub const fn with_all(self, flags: &[Self]) -> Self {
                     let mut me = self;
-                    me.add_all(flags)
+                    me.add_all(flags);
                     me
                 }
 
@@ -208,9 +209,10 @@ macro_rules! bitflags {
                     $(
                         $flag_vis const [< $flag_name:snake:upper >]: Self = Self($mask_value);
 
+                        #[must_use]
                         #[inline(always)]
-                        pub const fn [< $flag_name:snake:lower >]() -> Self {
-                            Self::[< $flag_name:snake:upper >]
+                        pub const fn [< $flag_name:snake:lower >](self) -> bool {
+                            self.has_all(Self::[< $flag_name:snake:upper >])
                         }
 
                         #[inline(always)]
@@ -247,12 +249,7 @@ macro_rules! bitflags {
                         #[must_use]
                         #[inline(always)]
                         pub const fn [< without_ $flag_name:snake:lower >](self) -> Self {
-                            self.without(Self::[< $flag_name:snake::upper >])
-                        }
-
-                        #[inline(always)]
-                        pub const fn [< has_ $flag_name:snake:lower >](self) -> bool {
-                            self.has_all(Self::[< $flag_name:snake:upper >])
+                            self.without(Self::[< $flag_name:snake:upper >])
                         }
                     )*
                 }
