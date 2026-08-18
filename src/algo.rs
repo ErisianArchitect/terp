@@ -154,33 +154,58 @@ pub enum Error {
     UnmatchedOpen(BracketStyle, usize),
     #[error("Unmatched close {0} at {1}")]
     UnmatchedClose(BracketStyle, usize),
-    #[error("Unmatched {expected} at {expected_index}, found {found} at {found_index}.")]
+    #[error("Comment was opened at {0} but not closed")]
+    UnmatchedCommentStart(usize),
+    #[error("Comment was closed at {0} but there was no open")]
+    UnmatchedCommentEnd(usize),
+    #[error("Unmatched quote at {0}")]
+    UnmatchedQuote(usize),
+    #[error("Unmatched single quote at {0}")]
+    UnmatchedSingleQuote(usize),
+    #[error("Unmatched backtick at {0}")]
+    UnmatchedBacktick(usize),
+    #[error("Unmatched {expected} at {expected_index}, found {found} at {found_index}")]
     MismatchedBracket {
         found: BracketStyle,
         found_index: usize,
         expected: BracketStyle,
         expected_index: usize,
     },
-    #[error("Unrecognized escape char at {0}.")]
+    #[error("Unrecognized escape char at {0}")]
     UnrecognizedEscape(usize),
-    #[error("Invalid hex escape at {0}.")]
+    #[error("Invalid hex escape at {0}")]
     InvalidHexEscape(usize),
-    #[error("Bracketed sequence size not what it was expected to be.")]
+    #[error("Bracketed sequence size not what it was expected to be")]
     InvalidBracketed,
 }
 
 pub type Result<T = (), E = Error> = ::core::result::Result<T, E>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum BacktrackKind {
+    Bracket(BracketStyle),
+    Comment,
+    Quote,
+    DoubleQuote,
+    BacktickQuote,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Backtrack {
     src_index: usize,
     token_index: usize,
-    bracket_style: BracketStyle,
+    kind: BacktrackKind,
 }
 
 impl Backtrack {
     fn unmatched_error(self) -> Error {
-        Error::UnmatchedClose(self.bracket_style, self.src_index)
+        match self.kind {
+            BacktrackKind::Bracket(bracket_style) => Error::UnmatchedClose(bracket_style, self.src_index),
+            BacktrackKind::Comment => ,
+            BacktrackKind::Quote => ,
+            BacktrackKind::DoubleQuote => ,
+            BacktrackKind::BacktickQuote => ,
+        }
     }
 
     fn mismatched_error(self, found: BracketStyle, found_index: usize) -> Error {
@@ -320,7 +345,7 @@ pub enum Escape<'a> {
     Str(&'a str),
 }
 
-struct Builder<'a> {
+struct TokenizerState<'a> {
     flags: BuilderFlags,
     index: usize,
     raw_start: usize,
@@ -328,7 +353,7 @@ struct Builder<'a> {
     backtrack: Vec<Backtrack>,
 }
 
-impl<'a> Builder<'a> {
+impl<'a> TokenizerState<'a> {
     #[inline(always)]
     fn new() -> Self {
         Self {
@@ -463,6 +488,14 @@ impl<'a> Builder<'a> {
         self.index = new_index;
         Ok(true)
     }
+
+    fn begin_comment(&mut self, src: &'a str) -> Result<bool> {
+
+    }
+
+    fn end_comment(&mut self, src: &'a str) -> Result<bool> {
+
+    }
 }
 
 /*
@@ -480,9 +513,9 @@ Some things it is planned to do:
   list as a `Name(&str)`.
 */
 pub fn tokenize<'a>(source: &'a str) -> Result<Vec<Token<'a>>> {
-    let mut builder = Builder::new();
+    let mut state = TokenizerState::new();
     parse(
-        &mut builder,
+        &mut state,
         source,
         move |out, src| -> Result<bool> {
             if out.index >= src.len() {
@@ -553,6 +586,9 @@ pub fn tokenize<'a>(source: &'a str) -> Result<Vec<Token<'a>>> {
                     let esc = &src_at[1..end];
                     return out.push_esc_str(src, 1 + esc.len(), esc);
                 }
+                b'/' if source.len() >= 2 => {
+
+                }
                 b'{' => return out.begin_bracketed(src, BracketStyle::Brace),
                 b'[' => return out.begin_bracketed(src, BracketStyle::Square),
                 b'(' => return out.begin_bracketed(src, BracketStyle::Parens),
@@ -571,15 +607,15 @@ pub fn tokenize<'a>(source: &'a str) -> Result<Vec<Token<'a>>> {
             Ok(true)
         }
     )?;
-    Ok(builder.tokens)
+    Ok(state.tokens)
 }
 
-pub trait TokenVisitorError {
-    fn invalid_bracketed() -> Self;
+pub trait TokenVisitorError<'a> {
+    fn invalid_bracketed(token: Token<'a>) -> Self;
 }
 
-impl TokenVisitorError for Error {
-    fn invalid_bracketed() -> Self {
+impl<'a> TokenVisitorError<'a> for Error {
+    fn invalid_bracketed(_token: Token<'a>) -> Self {
         Self::InvalidBracketed
     }
 }
@@ -699,14 +735,14 @@ macro_rules! default_visit_fns {
 }
 
 pub trait TokenVisitor<'a> {
-    type Error: TokenVisitorError;
+    type Error: TokenVisitorError<'a>;
 
     /// Visit an entire sequence of tokens.
     fn visit_tokens(
         &mut self,
         tokens: &[Token<'a>],
     ) -> Result<(), Self::Error>
-     where Self::Error: TokenVisitorError {
+     where Self::Error: TokenVisitorError<'a> {
         let mut index = 0usize;
         while index < tokens.len() {
             let token = tokens[index];
@@ -722,7 +758,7 @@ pub trait TokenVisitor<'a> {
                 Token::Bracketed(bracketed) => {
                     let range = bracketed.range(index + 1);
                     if tokens.len() < range.end {
-                        return Err(Self::Error::invalid_bracketed());
+                        return Err(Self::Error::invalid_bracketed(token));
                     }
                     index = range.end;
                     let b_tokens = &tokens[range];
@@ -731,7 +767,7 @@ pub trait TokenVisitor<'a> {
                 Token::BracketedSymbol(symbol, bracketed) => {
                     let range = bracketed.range(index + 1);
                     if tokens.len() < range.end {
-                        return Err(Self::Error::invalid_bracketed());
+                        return Err(Self::Error::invalid_bracketed(token));
                     }
                     index = range.end;
                     let b_tokens = &tokens[range];
