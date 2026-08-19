@@ -109,6 +109,7 @@ impl Bracketed {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Symbol {
+    // NOTE: If you add any variants, it will break Symbol::as_str.
     At = 0,      // @
     Octo = 1,    // #
     Dollar = 2,  // $
@@ -137,17 +138,52 @@ impl Symbol {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Token<'a> {
+    /// Any string sequence that is not interpreted as the other tokens.
     Str(&'a str),
+    /// An escape sequence for a string.
     Esc(&'a str),
-    Bracketed(Bracketed),
+    /// One of the symbols that is interpreted as a token.
+    /// Number has been intentionally limited to make the API less convoluted.
+    /// - `@`
+    /// - `#`
+    /// - `$`
+    /// - `%`
     Symbol(Symbol),
+    /// Bracketed content:
+    /// - `(content)`
+    /// - `{content}`
+    /// - `[content]`
+    /// - `<content>`
+    Bracketed(Bracketed),
+    /// Bracketed content that is preceded by a symbol.
     BracketedSymbol(Symbol, Bracketed),
+    /// An `id` is a string where each of the characters is one of:
+    /// - `A-Z`
+    /// - `a-z`
+    /// - `0-9`
+    /// - `_`
+    /// - `-`
+    ///
+    /// Ids are a special case. They are only parsed when a
+    /// a raw string is encountered after a symbol, otherwise
+    /// they are just a regular string.
     SymbolId(Symbol, &'a str),
+    /// A special case where a symbol is immediately followed by
+    /// another symbol.
     DoubleSymbol(Symbol, Symbol),
     Comment(usize),
+    SymbolComment(Symbol, usize),
     Quote(usize),
-    SingleQuote(usize),
-    BacktickQuote(usize),
+    SymbolQuote(Symbol, usize),
+    /// A single quoted string, which is a string that uses apostrophes `'`.
+    Single(usize),
+    /// A single quoted string, which is a string that uses apostrophes `'`,
+    /// but preceded by a [Symbol].
+    SymbolSingle(Symbol, usize),
+    Backticks(usize),
+    SymbolBackticks(Symbol, usize),
+    TripleBackticks(usize),
+    SymbolTripleBackticks(Symbol, usize),
     
 }
 
